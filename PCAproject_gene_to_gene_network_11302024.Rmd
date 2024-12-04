@@ -1,0 +1,558 @@
+---
+title: "PCA project analysis gene to gene network"
+output: html_notebook
+author: Yingxiao Shi(TK)
+---
+
+Load the required library
+
+```{r library load, massage = FALSE, warning = FALSE, include = FALSE}
+#install.packages("bootnet")
+#install.packages("GGMncv")
+#install.packages("glasso")
+#install.packages("huge")
+#install.packages("SILGGM")
+#install.packages("MVN")
+#BiocManager::install('curatedOvarianData')
+library(Biobase)
+library(bootnet)
+library(GGMncv)
+library(glasso)
+library(huge)
+library(SILGGM)
+library(dplyr)
+library(igraph)
+library(msigdbr)
+library(MVN)
+library(curatedOvarianData)
+library(Biobase)
+library(DESeq2)
+library(ggplot2)
+```
+
+access the data
+
+```{r assess the data}
+PCAI_merged_pheno <- read.csv("/Users/yshi797/Dropbox (Partners HealthCare)/Dave Liu Lab/Yingxiao_Shi(TK)/Project3_PCA/processed_data/PCAI_merged_pheno_05222024.csv", row.names = 1)
+PCAI_merged_raw <- read.csv("/Users/yshi797/Dropbox (Partners HealthCare)/Dave Liu Lab/Yingxiao_Shi(TK)/Project3_PCA/processed_data/PCAI_merged_raw_05192024.csv", row.names = 1)
+```
+
+```{r, read the data}
+# Define a function to replace only the first three dots with hyphens
+replace_first_three_dots <- function(name) {
+  # Split the name by dots
+  parts <- unlist(strsplit(name, "\\."))
+  new_name <- paste(paste(parts[1:4], collapse = "-"), paste(parts[5:length(parts)], collapse = "."), sep = ".")
+  return(new_name)
+  }
+
+colnames(PCAI_merged_raw) <- sapply(colnames(PCAI_merged_raw), replace_first_three_dots)
+```
+
+```{r subset the proper data}
+selected_hist <- c("N", "P", "MIS", "RGP", "VGP")
+selected_celltype <- c("tumor", "melanocyte")
+
+# batch2 data
+batch2_tumor_samples <- rownames(PCAI_merged_pheno[(PCAI_merged_pheno$batch_str == "Batch_2") &
+                                                     (PCAI_merged_pheno$histopathology %in% selected_hist) &
+                                                     (PCAI_merged_pheno$composition_TV %in% selected_celltype), ])
+#print(batch2_tumor_samples)
+print(length(batch2_tumor_samples))
+
+# now select the row data
+tumor_pheno_b2 <- PCAI_merged_pheno[batch2_tumor_samples, ]
+tumor_raw_count_b2 <- PCAI_merged_raw[, batch2_tumor_samples]
+
+# read the branch2 information
+b2_pheno_merged <- read.csv("/Users/yshi797/Dropbox (Partners HealthCare)/Dave Liu Lab/Yingxiao_Shi(TK)/Project3_PCA/processed_data/PCAI_batch2_tumor_SOM_branches_pheno_09082024.csv")
+
+rownames(b2_pheno_merged) <- b2_pheno_merged$sample_label
+
+b2_pheno_merged <- b2_pheno_merged[batch2_tumor_samples, ]
+```
+
+# check my own data
+
+```{r}
+b2_dds <- DESeqDataSetFromMatrix(countData = round(tumor_raw_count_b2),
+                                 colData = b2_pheno_merged,
+                                 design = ~ histopathology)
+# extract the normalized counts
+b2_dds <- estimateSizeFactors(b2_dds) # this is necessary before normalization
+b2_norm <- counts(b2_dds, normalize = T)
+b2_log <- log2(b2_norm + 1)
+#b2_log_matrix <- as.matrix(b2_log)
+```
+
+```{r data preprocessing}
+# Identify the range of raw, normalized, and log-transformed data
+raw_data_range <- range(tumor_raw_count_b2, na.rm = TRUE)
+print(paste("The range of the raw data:", paste(raw_data_range, collapse = " - ")))
+
+b2_norm_range <- range(b2_norm, na.rm = TRUE)
+print(paste("The range of normalized data:", paste(b2_norm_range, collapse = " - ")))
+
+b2_log_range <- range(b2_log, na.rm = TRUE)
+print(paste("The range of log-transformed data:", paste(b2_log_range, collapse = " - ")))
+```
+
+```{r}
+gene_data
+```
+
+# Identify gene variance to determine the top 1000 highly variable genes
+
+```{r identify gene variance, fig.height = 5, fig.width = 8}
+gene_variances <- apply(b2_log, 1, var)
+# redefine gene data
+gene_data <- data.frame(
+  Gene = rownames(b2_log),
+  Variance = gene_variances)
+
+gene_data <- gene_data[order(-gene_data$Variance), ]
+gene_data$Rank <- 1:nrow(gene_data)
+#gene_data
+
+top_n <- 1000  # Top 1000 variable genes
+gene_data$Highly_Variable <- ifelse(1:nrow(gene_data) <= top_n, "Highly Variable", "Others")
+
+# Subset for labeling top 10 genes
+top_genes <- gene_data[1:20, ]
+
+# Load ggrepel for avoiding label overlap
+library(ggrepel)
+
+# Create the plot
+gene_variance_plot <- ggplot(gene_data, aes(x = Rank, y = Variance, color = Highly_Variable)) +
+  geom_point(alpha = 0.7) +
+  geom_text_repel(
+    data = top_genes, 
+    aes(label = Gene), 
+    size = 6, 
+    color = "black",
+    box.padding = 0.5, # Padding around the label box
+    point.padding = 0.3, # Padding between the label and point
+    segment.color = "black", # Line color
+    segment.size = 0.5 # Line thickness
+  ) +
+  scale_color_manual(values = c("Highly Variable" = "tomato", "Others" = "gray")) +
+  labs(
+    title = "Gene Variance Distribution",
+    x = "Gene Rank (by Variance)",
+    y = "Variance",
+    color = "Gene Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title = element_text(size = 16), # Increase axis title size
+    axis.text = element_text(size = 14),  # Increase tick label size
+    legend.text = element_text(size = 12), # Increase legend text size
+    legend.title = element_text(size = 16) # Increase legend title size
+  )
+
+# Save the plot as a high-resolution PDF
+ggsave(
+  filename = "Gene_Variance_Distribution.pdf",
+  plot = gene_variance_plot,
+  device = "pdf",
+  width = 8, # Width in inches
+  height = 5, # Height in inches
+  dpi = 300   # Resolution in dots per inch
+)
+```
+
+subset the data based on different histopathology
+
+```{r subset the expression matrix based on annotation}
+# filter the highly variable genes
+# define the highly variabel 
+high_var_genes <- names(sort(gene_variances, decreasing = TRUE)[1:round(length(gene_variances) * 0.1)])
+b2_filtered <- b2_log[high_var_genes, ]
+
+print(paste0("Total highly variable genes:", length(high_var_genes)))
+#b2_filtered
+#table(b2_pheno_merged$histopathology)
+b2_N_samples <- rownames(b2_pheno_merged[b2_pheno_merged$histopathology == "N", ])
+b2_P_samples <- rownames(b2_pheno_merged[b2_pheno_merged$histopathology == "P", ])
+b2_MIS_samples  <- rownames(b2_pheno_merged[b2_pheno_merged$histopathology == "MIS", ])
+b2_RGP_samples <- rownames(b2_pheno_merged[b2_pheno_merged$histopathology == "RGP", ])
+b2_VGP_samples <- rownames(b2_pheno_merged[b2_pheno_merged$histopathology == "VGP", ])
+
+N_log <- b2_filtered[, b2_N_samples]
+P_log <- b2_filtered[, b2_P_samples]
+MIS_log <- b2_filtered[, b2_MIS_samples]
+RGP_log <- b2_filtered[, b2_RGP_samples]
+VGP_log <- b2_filtered[, b2_VGP_samples]
+```
+
+```{r}
+ncol(N_log)
+```
+
+# define monte carlo baysian methods
+
+```{r define the required functions}
+# define a function to standardize the data
+standardize <- function(x) {
+  return((x - mean(x)) / sd(x))
+}
+
+# monte carlo sampling and edge probility calculation
+monte_carlo_edge_probabilities <- function(expr_data, n_genes_subset, n_iterations, threshold = 0.5){
+  # identify total number of genes
+  data_log_std <- apply(expr_data, 1, standardize)
+  
+  n_genes <- ncol(data_log_std)
+  # define empty matrix for edge frequency
+  edge_frequency <- matrix(0, nrow = n_genes, ncol = n_genes)
+  
+  # monte carlo sampling
+  for (i in 1:n_iterations) {
+    # sample a subset of genes
+    sampled_genes <- sample(1:n_genes, size = n_genes_subset, replace = F)
+    sampled_data <- data.frame(data_log_std[, sampled_genes])
+    
+    # set the graphical lasso for network construction
+    huge_results <- huge(as.matrix(sampled_data), method = "glasso")
+    optimal_network <- huge.select(huge_results, criterion = "stars")$opt.icov
+    
+    # identify if the network is NULL
+    if (is.null(optimal_network) || any(dim(optimal_network) != c(n_genes_subset, n_genes_subset))) {
+      stop("Dimension mismatch or NULL network in iteration ", i)
+    }
+    edge_frequency[sampled_genes, sampled_genes] <- edge_frequency[sampled_genes, sampled_genes] + (optimal_network != 0)
+  }
+  
+  # normalize to edge probabilities
+  edge_probabilities <- edge_frequency / n_iterations
+  graph_matrix <- edge_probabilities > threshold
+  
+  return(list(edge_probabilities = edge_probabilities, graph_matrix = graph_matrix, std_matrix = data_log_std))
+}
+
+# define the plotting function
+plot_gene_network <- function(graph_matrix, expr_data, n_degree = 4) {
+  # Create Graph
+  gene_graph <- graph_from_adjacency_matrix(graph_matrix, weighted = TRUE, mode = "undirected", diag = FALSE)
+  V(gene_graph)$name <- colnames(expr_data)
+  
+  # Remove Isolated Nodes
+  gene_graph_connected <- delete_vertices(gene_graph, which(igraph::degree(gene_graph) == 0))
+  
+  # Choose a layout for better spacing
+  layout <- layout_with_fr(gene_graph_connected, niter = 500)  # Fruchterman-Reingold
+  
+  # Community Detection
+  communities <- cluster_walktrap(gene_graph_connected, weights = abs(E(gene_graph_connected)$weight))
+  
+  # Plot the Graph
+  plot(
+    communities,
+    gene_graph_connected,
+    vertex.size = igraph::degree(gene_graph_connected),
+    vertex.label = ifelse(igraph::degree(gene_graph_connected) > n_degree, V(gene_graph_connected)$name, NA),
+    vertex.label.cex = 1.2,
+    vertex.label.color = "black",
+    dge.width = E(gene_graph_connected)$width, 
+    layout = layout
+  )
+  # Return the connected graph for further analysis
+  return(gene_graph_connected)
+}
+
+
+```
+
+```{r process normal samples}
+# Measure runtime for each stage and store results
+N_runtime <- system.time({
+  N_results <- monte_carlo_edge_probabilities(expr_data = N_log, n_genes_subset = 250, n_iterations = 2, threshold = 0.48)
+})
+
+# Display runtime for each stage
+cat("Runtime for Normal samples:", N_runtime["elapsed"], "seconds\n")
+```
+
+```{r process precusor samples}
+P_runtime <- system.time({
+  P_results <- monte_carlo_edge_probabilities(expr_data = P_log, n_genes_subset = 100, n_iterations = 2, threshold = 0.48)
+})
+cat("Runtime for P samples:", P_runtime["elapsed"], "seconds\n")
+```
+
+```{r process MIS samples}
+MIS_runtime <- system.time({
+  MIS_results <- monte_carlo_edge_probabilities(expr_data = MIS_log, n_genes_subset = 100, n_iterations = 2, threshold = 0.48)
+})
+
+cat("Runtime for MIS samples:", MIS_runtime["elapsed"], "seconds\n")
+```
+
+```{r process RGP samples}
+RGP_runtime <- system.time({
+  RGP_results <- monte_carlo_edge_probabilities(expr_data = RGP_log, n_genes_subset = 100, n_iterations = 2, threshold = 0.48)
+})
+cat("Runtime for RGP samples:", RGP_runtime["elapsed"], "seconds\n")
+```
+
+# now process the data
+
+```{r process data based on each stage}
+VGP_runtime <- system.time({
+  VGP_results <- monte_carlo_edge_probabilities(expr_data = VGP_log, n_genes_subset = 100, n_iterations = 2, threshold = 0.48)
+})
+cat("Runtime for VGP samples:", VGP_runtime["elapsed"], "seconds\n")
+```
+
+```{r plot tje network, fig.height= 20, fig.width= 20}
+# Define the file names for each stage
+stages <- c("Normal", "Precursor", "MIS", "RGP", "VGP")
+results_list <- list(N_results, P_results, MIS_results, RGP_results, VGP_results)
+
+# Loop through the stages and save each plot
+connected_graphs <- list()  # List to store connected graphs for each stage
+
+# List to store connected graphs for each stage
+connected_graphs <- list()
+
+for (i in seq_along(stages)) {
+  # Open a PDF device
+  pdf(file = paste0(stages[i], "_Network.pdf"), width = 15, height = 15)
+  
+  # Plot the network for the current stage and capture the connected graph
+  connected_graph <- plot_gene_network(
+    graph_matrix = results_list[[i]]$graph_matrix,
+    expr_data = results_list[[i]]$std_matrix,
+    n_degree = 4
+  )
+  
+  # Close the PDF device
+  dev.off()
+  
+  # Store the connected graph for downstream analysis
+  connected_graphs[[stages[i]]] <- connected_graph
+}
+
+```
+
+# define the function to calculate the centrality
+
+```{r}
+# Function to calculate centrality measures and identify significant hubs
+analyze_centrality <- function(graph) {
+  # Calculate centrality measures
+  node_degree <- igraph::degree(graph)  # Degree centrality
+  node_betweenness <- betweenness(graph, directed = FALSE)  # Betweenness centrality
+  node_closeness <- closeness(graph)  # Closeness centrality
+  
+  # Create a dataframe for all centrality measures
+  centrality_df <- data.frame(
+    gene = V(graph)$name,
+    degree = node_degree,
+    betweenness = node_betweenness,
+    closeness = node_closeness
+  )
+  
+  # Rank genes by degree, betweenness, and closeness centrality
+  centrality_df <- centrality_df %>%
+    mutate(
+      degree_rank = rank(-degree),
+      betweenness_rank = rank(-betweenness),
+      closeness_rank = rank(-closeness),
+      average_rank = (degree_rank + betweenness_rank + closeness_rank) / 3
+    )
+  
+  # Define threshold for significant hubs (top 5%)
+  threshold <- quantile(centrality_df$average_rank, 0.05)
+  
+  # Identify significant hubs
+  significant_hubs <- centrality_df %>%
+    filter(average_rank <= threshold) %>%
+    arrange(average_rank)
+  
+  return(list(centrality_df = centrality_df, significant_hubs = significant_hubs))
+}
+
+# Ensure connected graphs are correctly retrieved
+stages <- c("Normal", "Precursor", "MIS", "RGP", "VGP")
+connected_graphs <- list(
+  Normal = connected_graphs[["Normal"]],
+  Precursor = connected_graphs[["Precursor"]],
+  MIS = connected_graphs[["MIS"]],
+  RGP = connected_graphs[["RGP"]],
+  VGP = connected_graphs[["VGP"]]
+)
+
+# Apply centrality analysis to all stages
+stage_centrality_results <- list()
+
+for (stage in names(connected_graphs)) {
+  cat("\nAnalyzing centrality for", stage, "...\n")
+  stage_centrality_results[[stage]] <- analyze_centrality(connected_graphs[[stage]])
+}
+
+# View significant hubs for each stage
+for (stage in names(stage_centrality_results)) {
+  cat("\nSignificant hubs for", stage, ":\n")
+  print(stage_centrality_results[[stage]]$significant_hubs)
+}
+```
+
+```{r}
+# Load necessary libraries
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+
+# Function to perform GO and KEGG enrichment for significant hub genes
+perform_enrichment_analysis <- function(significant_hubs) {
+  # Extract significant hub genes
+  hub_genes <- significant_hubs$gene
+  
+  # Convert gene symbols to Entrez IDs
+  hub_genes_entrez <- bitr(hub_genes, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+  
+  # Check if conversion was successful
+  if (is.null(hub_genes_entrez) || nrow(hub_genes_entrez) == 0) {
+    cat("No valid Entrez IDs for the given gene set.\n")
+    return(NULL)
+  }
+  
+  # Perform GO enrichment analysis
+  go_enrichment <- enrichGO(
+    gene = hub_genes_entrez$ENTREZID,
+    OrgDb = org.Hs.eg.db,
+    keyType = "ENTREZID",
+    ont = "BP",  # Biological Process
+    pAdjustMethod = "BH",
+    qvalueCutoff = 0.05
+  )
+  
+  # Perform KEGG enrichment analysis
+  kegg_enrichment <- enrichKEGG(
+    gene = hub_genes_entrez$ENTREZID,
+    organism = "hsa",  # Human organism code
+    pAdjustMethod = "BH",
+    qvalueCutoff = 0.05
+  )
+  
+  return(list(go = go_enrichment, kegg = kegg_enrichment))
+}
+
+# Initialize a list to store enrichment results
+enrichment_results <- list()
+
+# Loop through stages for centrality analysis and enrichment
+for (stage in names(stage_centrality_results)) {
+  cat("\nProcessing enrichment for stage:", stage, "...\n")
+  
+  # Extract significant hubs for the current stage
+  significant_hubs <- stage_centrality_results[[stage]]$significant_hubs
+  
+  # Perform enrichment analysis
+  enrichment_results[[stage]] <- perform_enrichment_analysis(significant_hubs)
+  
+  # Save plots for each stage
+  if (!is.null(enrichment_results[[stage]])) {
+    pdf(file = paste0(stage, "_GO_Enrichment.pdf"), width = 10, height = 7)
+    if (!is.null(enrichment_results[[stage]]$go)) {
+      print(
+        dotplot(enrichment_results[[stage]]$go, showCategory = 10) +
+          ggtitle(paste("GO Enrichment for", stage, "Stage"))
+      )
+    }
+    dev.off()
+    
+    pdf(file = paste0(stage, "_KEGG_Enrichment.pdf"), width = 10, height = 7)
+    if (!is.null(enrichment_results[[stage]]$kegg)) {
+      print(
+        barplot(enrichment_results[[stage]]$kegg, showCategory = 10) +
+          ggtitle(paste("KEGG Pathway Enrichment for", stage, "Stage"))
+      )
+    }
+    dev.off()
+  }
+}
+```
+
+```{r}
+library(fgsea)
+
+# now take the hallmark pathway gene signatures
+hallmark_pathway_geneSig <- read.csv("/Users/yshi797/Dropbox (Partners HealthCare)/Dave Liu Lab/Yingxiao_Shi(TK)/Project2_stable_disease_project/GeoMX_analysis/hallmark_pathway.csv")[-1]
+hallmark_pathway_geneSigList <- lapply(as.list(hallmark_pathway_geneSig), function(x) x[x != ""])
+
+# Function to perform GSEA for a stage
+perform_gsea <- function(centrality_df, hallmark_gene_sets) {
+  # Rank all genes by their degree (or another metric)
+  gene_list <- sort(centrality_df$degree, decreasing = TRUE)
+  names(gene_list) <- centrality_df$gene
+  print(gene_list)
+  
+  # Perform GSEA using hallmark gene sets
+  gsea_results <- fgsea(
+    pathways = hallmark_gene_sets,  # Replace with your gene set collection
+    stats = gene_list,
+    minSize = 15,
+    maxSize = 500,
+    scoreType = "pos"
+  )
+  
+  # Filter for significant pathways
+  #gsea_results <- gsea_results[gsea_results$padj < 0.05, ]
+  
+  return(gsea_results)
+}
+
+# Initialize a list to store GSEA results for each stage
+gsea_results_list <- list()
+
+# Loop through the stages to perform GSEA
+for (stage in names(stage_centrality_results)) {
+  cat("\nPerforming GSEA for stage:", stage, "...\n")
+  
+  # Get centrality dataframe for the stage
+  centrality_df <- stage_centrality_results[[stage]]$centrality_df
+  print(centrality_df)
+  
+  # Perform GSEA
+  gsea_results <- perform_gsea(centrality_df, hallmark_pathway_geneSigList)
+  gsea_results_list[[stage]] <- gsea_results
+  
+  # Plot GSEA results
+  # Plot the results
+  if (nrow(gsea_results) > 0) {
+    plotGseaTable(
+    pathways = hallmark_pathway_geneSigList,
+    stats = gene_list,
+    fgseaRes = gsea_results,
+    gseaParam = 1
+    )
+    } else {
+      message("No significant pathways found.")
+    }
+  }
+```
+
+```{r}
+gsea_results_list
+```
+
+```{r}
+library(ComplexHeatmap)
+
+# Subset expression matrix for hub genes
+hub_expression <- N_log[hub_genes, ]
+
+# Generate a heatmap
+Heatmap(
+  hub_expression,
+  name = "Expression",
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = FALSE,
+  #top_annotation = HeatmapAnnotation(groups = col_annotation)  # Optional group annotation
+)
+```
